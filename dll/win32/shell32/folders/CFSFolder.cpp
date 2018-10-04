@@ -1626,3 +1626,55 @@ HRESULT WINAPI CFSFolder::CallBack(IShellFolder *psf, HWND hwndOwner, IDataObjec
 
     return Shell_DefaultContextMenuCallBack(this, pdtobj);
 }
+
+class CFSFolderViewCB : public CComObjectRootEx<CComMultiThreadModelNoCS>, public IShellFolderViewCB {
+    public:
+        CFSFolderViewCB(): m_pidlFolder(NULL){}
+
+        ~CFSFolderViewCB()
+        {
+            if (m_pidlFolder)
+                ILFree(m_pidlFolder);
+        }
+
+        HRESULT WINAPI Initialize(LPITEMIDLIST pidlFolder)
+        {
+            m_pidlFolder = ILClone(pidlFolder);
+            return S_OK;
+        }
+
+        HRESULT OnGetNotify(LPITEMIDLIST *ppidl, LONG *lEvents)
+        {
+            *ppidl = ILClone(m_pidlFolder);
+            *lEvents = SHCNE_DISKEVENTS | SHCNE_NETSHARE | SHCNE_NETUNSHARE | SHCNE_ASSOCCHANGED;
+            return S_OK;
+        }
+
+        HRESULT STDMETHODCALLTYPE MessageSFVCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
+        {
+            HRESULT hr = E_FAIL;
+
+            switch (uMsg)
+            {
+                case SFVM_GETNOTIFY:
+                    hr = OnGetNotify((LPITEMIDLIST *)wParam, (LONG *)lParam);
+                    break;
+                default:
+                    hr = E_NOTIMPL;
+                    break;
+            }
+            return hr;       
+        }
+
+        DECLARE_PROTECT_FINAL_CONSTRUCT()
+        BEGIN_COM_MAP(CFSFolderViewCB)
+            COM_INTERFACE_ENTRY_IID(IID_IShellFolderViewCB, IShellFolderViewCB)
+        END_COM_MAP()
+    private:
+        LPITEMIDLIST m_pidlFolder;
+};
+
+HRESULT CFSFolder_CreateSFVCB(LPITEMIDLIST pidlFolder, REFIID riid, LPVOID * ppvOut)
+{
+    return ShellObjectCreatorInit<CFSFolderViewCB>(pidlFolder, riid, ppvOut);
+}

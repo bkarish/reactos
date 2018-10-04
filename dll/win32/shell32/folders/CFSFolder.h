@@ -99,4 +99,6 @@ class CFSFolder :
         END_COM_MAP()
 };
 
+HRESULT CFSFolder_CreateSFVCB(LPITEMIDLIST pidlFolder, REFIID riid, LPVOID * ppvOut);
+
 #endif /* _CFSFOLDER_H_ */

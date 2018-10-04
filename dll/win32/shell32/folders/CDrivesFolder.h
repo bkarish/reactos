@@ -88,4 +88,6 @@ class CDrivesFolder :
         END_COM_MAP()
 };
 
+HRESULT CDrivesFolder_CreateSFVCB(LPITEMIDLIST pidlFolder, REFIID riid, LPVOID * ppvOut);
+
 #endif /* _CDRIVESFOLDER_H_ */

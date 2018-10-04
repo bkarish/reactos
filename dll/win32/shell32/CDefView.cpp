@@ -114,12 +114,12 @@ class CDefView :
     private:
         HRESULT _MergeToolbar();
         BOOL _Sort();
-        VOID _DoFolderViewCB(UINT uMsg, WPARAM wParam, LPARAM lParam);
+        HRESULT _DoFolderViewCB(UINT uMsg, WPARAM wParam, LPARAM lParam);
 
     public:
         CDefView();
         ~CDefView();
-        HRESULT WINAPI Initialize(IShellFolder *shellFolder);
+        HRESULT WINAPI Initialize(IShellFolder *shellFolder, IShellView *psvOuter, IShellFolderViewCB *psfvcb);
         HRESULT IncludeObject(PCUITEMID_CHILD pidl);
         HRESULT OnDefaultCommand();
         HRESULT OnStateChange(UINT uFlags);
@@ -398,9 +398,10 @@ CDefView::~CDefView()
     SHFree(m_apidl);
 }
 
-HRESULT WINAPI CDefView::Initialize(IShellFolder *shellFolder)
+HRESULT WINAPI CDefView::Initialize(IShellFolder *shellFolder, IShellView *psvOuter, IShellFolderViewCB * psfvcb)
 {
     m_pSFParent = shellFolder;
+    m_pShellFolderViewCB = psfvcb;
     shellFolder->QueryInterface(IID_PPV_ARG(IShellFolder2, &m_pSF2Parent));
 
     return S_OK;
@@ -1035,7 +1036,7 @@ LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
 {
     CComPtr<IDropTarget>     pdt;
     SHChangeNotifyEntry      ntreg;
-    CComPtr<IPersistFolder2> ppf2;
+    LONG                     lEvents;                        
 
     TRACE("%p\n", this);
 
@@ -1053,17 +1054,13 @@ LRESULT CDefView::OnCreate(UINT uMsg, WPARAM wParam, LPARAM lParam, BOOL &bHandl
             ERR("Registering Drag Drop Failed");
     }
 
-    /* register for receiving notifications */
-    m_pSFParent->QueryInterface(IID_PPV_ARG(IPersistFolder2, &ppf2));
-    if (ppf2)
+    if (SUCCEEDED(_DoFolderViewCB(SFVM_GETNOTIFY, (WPARAM)&m_pidlParent, (LPARAM)&lEvents)))
     {
-        ppf2->GetCurFolder(&m_pidlParent);
+        /* register for receiving notifications */
         ntreg.fRecursive = TRUE;
         ntreg.pidl = m_pidlParent;
-        m_hNotify = SHChangeNotifyRegister(m_hWnd, SHCNRF_InterruptLevel | SHCNRF_ShellLevel, SHCNE_ALLEVENTS, SHV_CHANGE_NOTIFY, 1, &ntreg);
+        m_hNotify = SHChangeNotifyRegister(m_hWnd, SHCNRF_InterruptLevel | SHCNRF_ShellLevel, lEvents, SHV_CHANGE_NOTIFY, 1, &ntreg);
     }
-
-    /* _DoFolderViewCB(SFVM_GETNOTIFY, ??  ??) */
 
     m_hAccel = LoadAcceleratorsW(shell32_hInstance, MAKEINTRESOURCEW(IDA_SHELLVIEW));
 
@@ -2537,7 +2534,7 @@ HRESULT STDMETHODCALLTYPE CDefView::CreateViewWindow2(LPSV2CVW2_PARAMS view_para
 HRESULT STDMETHODCALLTYPE CDefView::CreateViewWindow3(IShellBrowser *psb, IShellView *psvPrevious, SV3CVW3_FLAGS view_flags, FOLDERFLAGS mask, FOLDERFLAGS flags, FOLDERVIEWMODE mode, const SHELLVIEWID *view_id, RECT *prcView, HWND *hwnd)
 {
     OLEMENUGROUPWIDTHS omw = { { 0, 0, 0, 0, 0, 0 } };
-
+    FOLDERVIEWMODE viewMode;
     *hwnd = NULL;
 
     TRACE("(%p)->(shlview=%p shlbrs=%p rec=%p hwnd=%p vmode=%x flags=%x)\n", this, psvPrevious, psb, prcView, hwnd, mode, flags);
@@ -2575,6 +2572,9 @@ HRESULT STDMETHODCALLTYPE CDefView::CreateViewWindow3(IShellBrowser *psb, IShell
         else
             FIXME("Ignoring unrecognized VID %s\n", debugstr_guid(view_id));
     }
+
+    if (SUCCEEDED(_DoFolderViewCB(SFVM_DEFVIEWMODE, NULL, (LPARAM)&viewMode)))
+        m_FolderSettings.ViewMode = viewMode;
 
     /* Get our parent window */
     m_pShellBrowser->GetWindow(&m_hWndParent);
@@ -3245,17 +3245,18 @@ HRESULT CDefView::_MergeToolbar()
     return S_OK;
 }
 
-VOID CDefView::_DoFolderViewCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
+HRESULT CDefView::_DoFolderViewCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
 {
     if (m_pShellFolderViewCB)
     {
-        m_pShellFolderViewCB->MessageSFVCB(uMsg, wParam, lParam);
+       return m_pShellFolderViewCB->MessageSFVCB(uMsg, wParam, lParam);
     }
+    return E_FAIL;
 }
 
-HRESULT CDefView_CreateInstance(IShellFolder *pFolder, REFIID riid, LPVOID * ppvOut)
+HRESULT CDefView_CreateInstance(IShellFolder *pFolder, IShellView *psvOuter, IShellFolderViewCB *psfvcb, REFIID riid, LPVOID * ppvOut)
 {
-    return ShellObjectCreatorInit<CDefView>(pFolder, riid, ppvOut);
+    return ShellObjectCreatorInit<CDefView>(pFolder, psvOuter, psfvcb, riid, ppvOut);
 }
 
 HRESULT WINAPI SHCreateShellFolderViewEx(
@@ -3270,7 +3271,7 @@ HRESULT WINAPI SHCreateShellFolderViewEx(
       psvcbi->fvm, psvcbi->psvOuter);
 
     *ppsv = NULL;
-    hRes = CDefView_CreateInstance(psvcbi->pshf, IID_PPV_ARG(IShellView, &psv));
+    hRes = CDefView_CreateInstance(psvcbi->pshf, psvcbi->psvOuter, NULL, IID_PPV_ARG(IShellView, &psv));
     if (FAILED_UNEXPECTEDLY(hRes))
         return hRes;
 
@@ -3291,18 +3292,9 @@ HRESULT WINAPI SHCreateShellFolderView(const SFV_CREATE *pcsfv,
     TRACE("sf=%p outer=%p callback=%p\n",
       pcsfv->pshf, pcsfv->psvOuter, pcsfv->psfvcb);
 
-    hRes = CDefView_CreateInstance(pcsfv->pshf, IID_PPV_ARG(IShellView, &psv));
+    hRes = CDefView_CreateInstance(pcsfv->pshf, pcsfv->psvOuter, pcsfv->psfvcb, IID_PPV_ARG(IShellView, &psv));
     if (FAILED(hRes))
         return hRes;
-
-    if (pcsfv->psfvcb)
-    {
-        CComPtr<IShellFolderView> sfv;
-        if (SUCCEEDED(psv->QueryInterface(IID_PPV_ARG(IShellFolderView, &sfv))))
-        {
-            sfv->SetCallback(pcsfv->psfvcb, NULL);
-        }
-    }
 
     *ppsv = psv.Detach();
     return hRes;

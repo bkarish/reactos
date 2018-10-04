@@ -687,8 +687,14 @@ HRESULT WINAPI CDrivesFolder::CreateViewObject(HWND hwndOwner, REFIID riid, LPVO
     }
     else if (IsEqualIID(riid, IID_IShellView))
     {
-            SFV_CREATE sfvparams = {sizeof(SFV_CREATE), this};
-            hr = SHCreateShellFolderView(&sfvparams, (IShellView**)ppvOut);
+        SFV_CREATE sfvparams;
+
+        sfvparams.cbSize = sizeof(SFV_CREATE);
+        sfvparams.pshf = this;
+        sfvparams.psvOuter = NULL;
+        CDrivesFolder_CreateSFVCB(pidlRoot, IID_PPV_ARG(IShellFolderViewCB, &sfvparams.psfvcb));
+
+        hr = SHCreateShellFolderView(&sfvparams, (IShellView**)ppvOut);
     }
     TRACE ("-- (%p)->(interface=%p)\n", this, ppvOut);
     return hr;
@@ -1106,4 +1112,65 @@ HRESULT WINAPI CDrivesFolder::CallBack(IShellFolder *psf, HWND hwndOwner, IDataO
         return S_OK;
 
     return Shell_DefaultContextMenuCallBack(this, pdtobj);
+}
+
+class CDrivesFolderViewCB : public CComObjectRootEx<CComMultiThreadModelNoCS>, public IShellFolderViewCB {
+    public:
+        CDrivesFolderViewCB(): m_pidlFolder(NULL){}
+
+        ~CDrivesFolderViewCB()
+        {
+            if (m_pidlFolder)
+                ILFree(m_pidlFolder);
+        }
+
+        HRESULT WINAPI Initialize(LPITEMIDLIST pidlFolder)
+        {
+            m_pidlFolder = ILClone(pidlFolder);
+            return S_OK;
+        }
+
+        HRESULT OnGetNotify(LPITEMIDLIST *ppidl, LONG *lEvents)
+        {
+            *ppidl = ILClone(m_pidlFolder);
+            *lEvents = SHCNE_DRIVEADD | SHCNE_DRIVEREMOVED | SHCNE_MEDIAINSERTED | SHCNE_MEDIAREMOVED | SHCNE_NETSHARE | SHCNE_NETUNSHARE | SHCNE_RENAMEFOLDER | SHCNE_UPDATEITEM;
+            return S_OK;
+        }
+
+        HRESULT OnDefViewMode(FOLDERVIEWMODE *pFVM)
+        {
+            *pFVM = FVM_DETAILS;
+            return S_OK;
+        }
+
+        HRESULT STDMETHODCALLTYPE MessageSFVCB(UINT uMsg, WPARAM wParam, LPARAM lParam)
+        {
+            HRESULT hr = E_FAIL;
+
+            switch (uMsg)
+            {
+                case SFVM_GETNOTIFY:
+                    hr = OnGetNotify((LPITEMIDLIST *)wParam, (LONG *)lParam);
+                    break;
+                case SFVM_DEFVIEWMODE:
+                    hr = OnDefViewMode((FOLDERVIEWMODE *)lParam);
+                    break;
+                default:
+                    hr = E_NOTIMPL;
+                    break;
+            }
+            return hr;       
+        }
+
+        DECLARE_PROTECT_FINAL_CONSTRUCT()
+        BEGIN_COM_MAP(CDrivesFolderViewCB)
+            COM_INTERFACE_ENTRY_IID(IID_IShellFolderViewCB, IShellFolderViewCB)
+        END_COM_MAP()
+    private:
+        LPITEMIDLIST m_pidlFolder;
+};
+
+HRESULT CDrivesFolder_CreateSFVCB(LPITEMIDLIST pidlFolder, REFIID riid, LPVOID * ppvOut)
+{
+    return ShellObjectCreatorInit<CDrivesFolderViewCB>(pidlFolder, riid, ppvOut);
 }
